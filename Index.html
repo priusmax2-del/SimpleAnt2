@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>DENOX.CAV — Ant Runner</title>
+<style>
+  :root{
+    --bg: #b00000;     /* vermelho do site */
+    --box: #fff;
+    --ui: #111;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:monospace;}
+  .wrap{
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .card{
+    background:var(--box);
+    width: 760px;
+    max-width:95vw;
+    border-radius:12px;
+    padding:18px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.35);
+    color:var(--ui);
+    text-align:center;
+  }
+
+  /* canvas layout */
+  #game {
+    background: #7bd26b; /* grass */
+    display:block;
+    margin: 8px auto 0;
+    image-rendering: pixelated; /* mantém o estilo 8-bit */
+    border-radius:6px;
+    box-shadow: inset 0 -8px 20px rgba(0,0,0,0.15);
+  }
+
+  .info{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:12px;
+    margin-top:8px;
+  }
+
+  .score{
+    font-weight:bold;
+    font-size:18px;
+  }
+
+  .hint{font-size:13px;color:#333;margin-top:6px;}
+  button{
+    background:#b00000;color:#fff;border:0;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer;
+  }
+  @media (max-width:520px){
+    .card{padding:12px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h2>DENOX.CAV — Ant Runner</h2>
+    <p class="hint">Toque na tela / clique / aperte <strong>Space</strong> pra pular as pedras. Segura o press pra pulo mais longo.</p>
+
+    <!-- Canvas do jogo -->
+    <canvas id="game" width="320" height="160"></canvas>
+
+    <div class="info">
+      <div class="score">Score: <span id="score">0</span></div>
+      <div>
+        <button id="btnRestart">Restart</button>
+      </div>
+    </div>
+
+    <p style="margin-top:10px;color:#444;font-size:13px">
+      Simples, pixel e viciante — feito com HTML5 canvas. Boa sorte!
+    </p>
+  </div>
+</div>
+
+<script>
+/*
+  Ant Runner — single-file 8-bit endless runner.
+  Controls:
+    - Desktop: Space or Click
+    - Mobile: Tap or hold to extend jump
+  Paste this into index.html and commit.
+*/
+
+// --- Setup canvas + scaling for crisp "8-bit" look ---
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Virtual pixel scale (keeps pixel art look). Canvas size is small (320x160).
+const W = canvas.width;
+const H = canvas.height;
+
+// Game state
+let running = true;
+let score = 0;
+let best = 0;
+let lastTime = 0;
+let spawnTimer = 0;
+let gameSpeed = 2.0; // increases slowly
+const obstacles = [];
+
+// Ant (player) properties (pixel art)
+const ant = {
+  x: 40,
+  y: H - 32, // ground aligned
+  w: 12,
+  h: 10,
+  vy: 0,
+  onGround: true,
+  color: '#222',
+  jumpPower: -5.6,
+  gravity: 0.28,
+  holdJumpMultiplier: 0.85, // when holding, reduce gravity temporarily
+  holding: false
+};
+
+// Ground
+const groundY = H - 18;
+
+// Utility: AABB collision
+function collide(a, b){
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
+}
+
+// Create an obstacle (stone)
+function spawnObstacle(){
+  const size = 10 + Math.floor(Math.random()*12); // 10..22
+  const obs = {
+    x: W + 8,
+    y: groundY - size + 6, // align to ground visually
+    w: size,
+    h: size,
+    color: '#555'
+  };
+  obstacles.push(obs);
+}
+
+// Reset game
+function reset(){
+  obstacles.length = 0;
+  score = 0;
+  gameSpeed = 2.0;
+  ant.y = H - 32;
+  ant.vy = 0;
+  ant.onGround = true;
+  running = true;
+}
+
+// Input handling (works with touch, mouse, keyboard)
+let inputDown = false;
+function startJump(){
+  if(!running){
+    reset();
+    return;
+  }
+  if(ant.onGround){
+    ant.vy = ant.jumpPower;
+    ant.onGround = false;
+  }
+  ant.holding = true;
+  inputDown = true;
+}
+function endJump(){
+  inputDown = false;
+  ant.holding = false;
+}
+
+window.addEventListener('keydown', e=>{
+  if(e.code === 'Space') { e.preventDefault(); startJump(); }
+});
+window.addEventListener('keyup', e=>{
+  if(e.code === 'Space') { e.preventDefault(); endJump(); }
+});
+canvas.addEventListener('mousedown', e=> startJump());
+canvas.addEventListener('mouseup', e=> endJump());
+canvas.addEventListener('touchstart', e=> { e.preventDefault(); startJump(); }, {passive:false});
+canvas.addEventListener('touchend', e=> { e.preventDefault(); endJump(); }, {passive:false});
+
+document.getElementById('btnRestart').onclick = reset;
+
+// Main update loop
+function update(ts){
+  if(!lastTime) lastTime = ts;
+  const dt = (ts - lastTime) / 16.666; // normalize ~60fps
+  lastTime = ts;
+
+  if(running){
+    // update spawn timer and speed
+    spawnTimer += dt;
+    if(spawnTimer > 60 - Math.min(score/10, 40)){ // spawn more often as score grows
+      spawnTimer = 0;
+      spawnObstacle();
+    }
+    // slowly increase speed
+    gameSpeed += 0.0008 * dt * Math.max(1, score/100);
+
+    // update ant physics
+    if(!ant.onGround){
+      // if holding jump and still going up, reduce gravity to allow longer jump
+      if(ant.holding && ant.vy < 0) ant.vy += ant.gravity * ant.holdJumpMultiplier * dt;
+      else ant.vy += ant.gravity * dt;
+      ant.y += ant.vy * dt;
+      if(ant.y >= H - 32){
+        ant.y = H - 32;
+        ant.vy = 0;
+        ant.onGround = true;
+      }
+    }
+
+    // update obstacles
+    for(let i = obstacles.length - 1; i >= 0; i--){
+      const o = obstacles[i];
+      o.x -= gameSpeed * dt * 2;
+      if(o.x + o.w < -20) obstacles.splice(i,1);
+      // collision
+      const playerBox = { x: ant.x, y: Math.round(ant.y), w: ant.w, h: ant.h };
+      if(collide(playerBox, o)){
+        running = false;
+        best = Math.max(best, score);
+      }
+    }
+
+    // score
+    score += 0.05 * dt * Math.ceil(gameSpeed);
+    document.getElementById('score').innerText = Math.floor(score);
+  }
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+// Draw pixel-style ant
+function drawAnt(x,y){
+  // draw a tiny pixel-art ant using rectangles
+  // body
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x, y, 12, 6); // body
+  // head (left)
+  ctx.fillRect(x-4, y+1, 4, 4);
+  // legs (3 legs)
+  ctx.fillRect(x+1, y+6, 2, 2);
+  ctx.fillRect(x+5, y+6, 2, 2);
+  ctx.fillRect(x+9, y+6, 2, 2);
+  // antenna
+  ctx.fillRect(x-5, y-1, 1, 2);
+  ctx.fillRect(x-3, y-2, 1, 2);
+}
+
+// Main draw
+function draw(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+
+  // sky gradient-ish
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, '#8fe7ff');
+  g.addColorStop(1, '#72cff0');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  // ground
+  ctx.fillStyle = '#3b842f';
+  ctx.fillRect(0, groundY, W, H - groundY);
+
+  // draw obstacles (stones) as pixel blocks with simple shading
+  for(const o of obstacles){
+    ctx.fillStyle = o.color;
+    // stone main
+    ctx.fillRect(Math.round(o.x), Math.round(o.y), o.w, o.h);
+    // highlight
+    ctx.fillStyle = '#777';
+    ctx.fillRect(Math.round(o.x)+2, Math.round(o.y)+1, Math.max(1,o.w-4), Math.max(1,Math.floor(o.h/3)));
+  }
+
+  // draw ant
+  drawAnt(Math.round(ant.x), Math.round(ant.y));
+
+  // HUD & messages
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.font = '10px monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('DENOX.CAV', 6, 6);
+
+  if(!running){
+    // overlay game over
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(W/2 - 86, H/2 - 28, 172, 56);
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', W/2, H/2 - 10);
+    ctx.font = '10px monospace';
+    ctx.fillText('Toque / Clique para reiniciar', W/2, H/2 + 8);
+    ctx.textAlign = 'left';
+  }
+}
+
+// initial spawn so first obstacle doesn't appear too late
+spawnTimer = 50;
+requestAnimationFrame(update);
+
+// allow click on canvas to restart quickly when game over
+canvas.addEventListener('click', ()=>{
+  if(!running) reset();
+});
+
+</script>
+</body>
+  </html>
